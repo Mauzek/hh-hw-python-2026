@@ -19,39 +19,87 @@ class ActiveCall:
 
 class Switchboard:
     def __init__(self) -> None:
-        self._active_calls: list[ActiveCall] = []
-        self._cross_border_calls_count: int = 0
+        self._registry: list[ActiveCall] = []
+        self._cross_border_total: int = 0
 
     def register_call(self, raw_call: str) -> ActiveCall:
-        parts = raw_call.split(",")
+        components = self._extract_components(raw_call)
+
+        caller = self._make_user(*components[:3])
+        receiver = self._make_user(*components[3:])
+
+        if caller.id == receiver.id:
+            raise ValueError("Caller and receiver must be different users")
+
+        call_record = ActiveCall(caller=caller, receiver=receiver)
+        self._registry.append(call_record)
+
+        if call_record.is_cross_border:
+            self._cross_border_total += 1
+
+        return call_record
+
+    def _extract_components(self, raw: str) -> list[str]:
+        """Извлекает и валидирует 6 полей из сырой строки"""
+        parts = [p.strip() for p in raw.split(",")]
+
         if len(parts) != 6:
-            raise ValueError("Неверный формат строки raw_call")
+            raise ValueError("raw_call must contain exactly 6 arguments")
 
-        caller_id_str, caller_name, caller_phone, receiver_id_str, receiver_name, receiver_phone = parts
+        id_fields = [parts[0], parts[3]]
+        name_fields = [parts[1], parts[4]]
+        phone_fields = [parts[2], parts[5]]
 
-        caller_id = int(caller_id_str)
-        receiver_id = int(receiver_id_str)
+        if not all(id_fields):
+            raise ValueError("User id cannot be empty")
+        if not all(name_fields):
+            raise ValueError("User fullname cannot be empty")
+        if not all(phone_fields):
+            raise ValueError("How do you call without a phone?")
 
-        if caller_phone.startswith(LOCAL_PHONE_PREFIX):
-            caller = LocalUser(id=caller_id, fullname=caller_name, phone=caller_phone)
-        else:
-            caller = ForeignUser(id=caller_id, fullname=caller_name, phone=caller_phone)
+        return parts
 
-        if receiver_phone.startswith(LOCAL_PHONE_PREFIX):
-            receiver = LocalUser(id=receiver_id, fullname=receiver_name, phone=receiver_phone)
-        else:
-            receiver = ForeignUser(id=receiver_id, fullname=receiver_name, phone=receiver_phone)
+    def _make_user(self, uid: str, name: str, phone: str) -> User:
+        """Метод создания пользователя с полной валидацией"""
+        try:
+            parsed_id = int(uid)
+        except ValueError as err:
+            raise ValueError("User id must be an integer") from err
 
-        active_call = ActiveCall(caller=caller, receiver=receiver)
-        self._active_calls.append(active_call)
+        if parsed_id < 1:
+            raise ValueError("User id must be positive")
 
-        if active_call.is_cross_border:
-            self._cross_border_calls_count += 1
+        if not name.strip():
+            raise ValueError("User fullname cannot be empty")
 
-        return active_call
+        for char in name:
+            if not (char.isalpha() or char.isspace()):
+                raise ValueError("User fullname must contain only letters and spaces")
+
+        if not any(c.isalpha() for c in name):
+            raise ValueError("User fullname must contain at least one letter")
+
+        self._ensure_valid_phone(phone)
+
+        user_cls = LocalUser if phone.startswith(LOCAL_PHONE_PREFIX) else ForeignUser
+        return user_cls(id=parsed_id, fullname=name, phone=phone)
+
+    def _ensure_valid_phone(self, phone: str) -> None:
+        """Валидация формата телефонного номера"""
+        if not phone or phone[0] != "+":
+            raise ValueError("User phone must start with '+'")
+
+        digits = phone[1:]
+        if not digits or not digits.isdigit():
+            raise ValueError("User phone must contain only digits after '+'")
+
+        if not (7 <= len(digits) <= 15):
+            raise ValueError("User phone must be between 7 and 15 digits")
 
     def get_active_calls_count(self) -> int:
-        return len(self._active_calls)
+        """Возвращает количество активных звонков. Сложность: O(1)"""
+        return len(self._registry)
 
     def get_cross_border_calls_count(self) -> int:
-        return self._cross_border_calls_count
+        """Возвращает количество международных звонков. Сложность: O(1)"""
+        return self._cross_border_total
